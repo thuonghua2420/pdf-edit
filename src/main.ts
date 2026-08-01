@@ -12,6 +12,10 @@ import "./styles.css";
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 type Tool = "select" | "text" | "cover" | "replace";
+type ImageExportFormat = "png" | "jpg";
+type ImagePdfPageSize = "fit" | "a4";
+type WordExportMode = "layout" | "text";
+type ConversionTool = "pdf-word" | "word-pdf" | "pdf-images" | "images-pdf";
 
 type OverlayBase = {
   id: string;
@@ -84,8 +88,14 @@ const state = {
   color: "#111827",
   coverColor: "#ffffff",
   exportName: "edited.pdf",
+  imageExportFormat: "png" as ImageExportFormat,
+  imageExportDpi: 150,
+  imageExportQuality: 90,
+  imagePdfPageSize: "fit" as ImagePdfPageSize,
+  wordExportMode: "layout" as WordExportMode,
+  conversionTool: "pdf-word" as ConversionTool,
   busy: false,
-  status: "Thêm một hoặc nhiều file PDF để bắt đầu.",
+  status: "Nhập file PDF hoặc Word để bắt đầu.",
 };
 
 const id = () =>
@@ -149,6 +159,79 @@ const hexToRgb = (hex: string) => {
 const getPageLabel = (page: PageItem, index: number) =>
   `${index + 1}. ${page.sourceName} - trang ${page.pageIndex + 1}`;
 
+function conversionToolbarMarkup(pageCount: number) {
+  let controls = "";
+
+  if (state.conversionTool === "pdf-word") {
+    controls = `
+      <select id="word-export-mode" class="toolbar-select" aria-label="Kiểu Word" title="Kiểu Word">
+        <option value="layout" ${state.wordExportMode === "layout" ? "selected" : ""}>Giữ bố cục</option>
+        <option value="text" ${state.wordExportMode === "text" ? "selected" : ""}>Chỉ text</option>
+      </select>
+      <button id="pdf-to-word" class="toolbar-button accent" ${pageCount && !state.busy ? "" : "disabled"}>
+        <i data-lucide="file-down"></i>
+        Xuất Word
+      </button>
+    `;
+  } else if (state.conversionTool === "word-pdf") {
+    controls = `
+      <label class="toolbar-button accent" title="Chọn file Word để chuyển sang PDF">
+        <i data-lucide="file-up"></i>
+        Chọn Word
+        <input id="word-input" type="file" accept=".doc,.docx,.rtf,.odt,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+      </label>
+    `;
+  } else if (state.conversionTool === "pdf-images") {
+    controls = `
+      <select id="image-format" class="toolbar-select short" aria-label="Định dạng ảnh" title="Định dạng ảnh">
+        <option value="png" ${state.imageExportFormat === "png" ? "selected" : ""}>PNG</option>
+        <option value="jpg" ${state.imageExportFormat === "jpg" ? "selected" : ""}>JPG</option>
+      </select>
+      <label class="toolbar-inline-field" title="Độ phân giải ảnh">
+        <span>DPI</span>
+        <input id="image-dpi" type="number" min="72" max="300" step="1" value="${state.imageExportDpi}" />
+      </label>
+      ${
+        state.imageExportFormat === "jpg"
+          ? `<label class="toolbar-inline-field" title="Chất lượng JPG">
+              <span>JPG</span>
+              <input id="image-quality" type="number" min="40" max="100" step="1" value="${state.imageExportQuality}" />
+            </label>`
+          : ""
+      }
+      <button id="pdf-to-images" class="toolbar-button accent" ${pageCount && !state.busy ? "" : "disabled"}>
+        <i data-lucide="images"></i>
+        Xuất ảnh
+      </button>
+    `;
+  } else {
+    controls = `
+      <select id="image-pdf-page-size" class="toolbar-select" aria-label="Khổ trang PDF" title="Khổ trang PDF">
+        <option value="fit" ${state.imagePdfPageSize === "fit" ? "selected" : ""}>Theo ảnh</option>
+        <option value="a4" ${state.imagePdfPageSize === "a4" ? "selected" : ""}>A4</option>
+      </select>
+      <label class="toolbar-button accent" title="Chọn ảnh để tạo PDF">
+        <i data-lucide="image-up"></i>
+        Chọn ảnh
+        <input id="images-input" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" multiple />
+      </label>
+    `;
+  }
+
+  return `
+    <div class="toolbar-group conversion-group">
+      <span class="toolbar-group-label">Chuyển đổi</span>
+      <select id="conversion-tool" class="toolbar-select" aria-label="Tác vụ chuyển đổi">
+        <option value="pdf-word" ${state.conversionTool === "pdf-word" ? "selected" : ""}>PDF → Word</option>
+        <option value="word-pdf" ${state.conversionTool === "word-pdf" ? "selected" : ""}>Word → PDF</option>
+        <option value="pdf-images" ${state.conversionTool === "pdf-images" ? "selected" : ""}>PDF → Hình ảnh</option>
+        <option value="images-pdf" ${state.conversionTool === "images-pdf" ? "selected" : ""}>Hình ảnh → PDF</option>
+      </select>
+      ${controls}
+    </div>
+  `;
+}
+
 function render() {
   const page = selectedPage();
   const overlay = selectedOverlay();
@@ -161,18 +244,43 @@ function render() {
       <header class="topbar">
         <div>
           <p class="eyebrow">Support PDF</p>
-          <h1>Chỉnh sửa và xuất PDF</h1>
-        </div>
-        <div class="top-actions">
-          <label class="icon-button primary" title="Thêm PDF">
-            <i data-lucide="file-plus-2"></i>
-            <input id="file-input" type="file" accept="application/pdf,.pdf" multiple />
-          </label>
-          <button class="icon-button" id="export" title="Xuất PDF" ${pageCount ? "" : "disabled"}>
-            <i data-lucide="download"></i>
-          </button>
+          <h1>Công cụ PDF</h1>
         </div>
       </header>
+
+      <nav class="commandbar" aria-label="Thanh công cụ PDF">
+        <div class="commandbar-scroll">
+          <div class="toolbar-group">
+            <label class="toolbar-button accent" title="Nhập PDF hoặc Word">
+              <i data-lucide="file-plus-2"></i>
+              Nhập tệp
+              <input id="file-input" type="file" accept=".pdf,.doc,.docx,.rtf,.odt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple />
+            </label>
+            <button class="toolbar-button" id="export" title="Xuất PDF" ${pageCount && !state.busy ? "" : "disabled"}>
+              <i data-lucide="download"></i>
+              Xuất PDF
+            </button>
+            <button id="merge-all" class="toolbar-button" title="Merge toàn bộ PDF" ${fileCount && !state.busy ? "" : "disabled"}>
+              <i data-lucide="files"></i>
+              Merge PDF
+            </button>
+          </div>
+
+          <span class="toolbar-separator"></span>
+
+          <div class="toolbar-group">
+            <span class="toolbar-group-label">Chỉnh sửa</span>
+            ${toolButton("select", "mouse-pointer-2", "Chọn")}
+            ${toolButton("text", "type", "Thêm chữ")}
+            ${toolButton("cover", "square", "Che nội dung")}
+            ${toolButton("replace", "text-cursor-input", "Sửa text gốc")}
+          </div>
+
+          <span class="toolbar-separator"></span>
+
+          ${conversionToolbarMarkup(pageCount)}
+        </div>
+      </nav>
 
       <section class="workspace">
         <aside class="sidebar">
@@ -203,18 +311,10 @@ function render() {
                     )
                     .join("")
                 : `<div class="empty">
-                    <i data-lucide="file-up"></i>
-                    <p>Kéo thả hoặc chọn file PDF.</p>
+                    <i data-lucide="files"></i>
+                    <p>Chưa có tài liệu</p>
                   </div>`
             }
-          </div>
-
-          <div class="merge-box">
-            <button id="merge-all" class="wide-button accent" ${fileCount ? "" : "disabled"}>
-              <i data-lucide="files"></i>
-              Merge toàn bộ PDF
-            </button>
-            <p>Ghép nguyên tất cả trang theo thứ tự file đã thêm.</p>
           </div>
 
           <div class="sidebar-actions">
@@ -233,11 +333,12 @@ function render() {
         <section class="stage-wrap">
           <div class="drop-zone" id="drop-zone">
             <div class="stage-toolbar">
-              <div class="segmented" role="tablist" aria-label="Công cụ">
-                ${toolButton("select", "mouse-pointer-2", "Chọn")}
-                ${toolButton("text", "type", "Thêm chữ")}
-                ${toolButton("cover", "square", "Che nội dung")}
-                ${toolButton("replace", "text-cursor-input", "Sửa text gốc")}
+              <div class="stage-title">
+                <i data-lucide="file-text"></i>
+                <div>
+                  <strong>${page ? escapeHtml(page.sourceName) : "Tài liệu"}</strong>
+                  <span>${page ? `Trang ${state.pages.indexOf(page) + 1} / ${pageCount}` : "Chưa có trang"}</span>
+                </div>
               </div>
               <p class="status ${state.busy ? "busy" : ""}">${escapeHtml(state.status)}</p>
             </div>
@@ -261,8 +362,8 @@ function render() {
                       </div>
                     </div>`
                   : `<div class="empty-stage">
-                      <i data-lucide="files"></i>
-                      <h2>Chọn PDF để thao tác</h2>
+                      <i data-lucide="file-up"></i>
+                      <h2>Nhập PDF hoặc Word</h2>
                     </div>`
               }
             </div>
@@ -294,7 +395,7 @@ function render() {
               <span>Cỡ chữ</span>
               <input id="font-size" type="number" min="6" max="96" step="0.1" value="${formatFontSize(state.fontSize)}" />
             </label>
-            <label class="field">
+            <label class="field color-field">
               <span>Màu chữ</span>
               <input id="text-color" type="color" value="${state.color}" />
             </label>
@@ -312,8 +413,8 @@ function render() {
                   <strong>${escapeHtml(textItem.text.slice(0, 90))}</strong>
                 </div>
                 <button id="replace-text" class="wide-button accent" ${state.busy ? "disabled" : ""}>
-                  <i data-lucide="text-cursor-input"></i>
-                  Lưu thay text gốc
+                  <i data-lucide="check"></i>
+                  Lưu thay đổi
                 </button>`
               : ""
           }
@@ -321,7 +422,10 @@ function render() {
           <div class="divider"></div>
 
           <div class="overlay-list">
-            <h3>Lớp sửa trên trang</h3>
+            <div class="section-heading">
+              <span>Lớp sửa trên trang</span>
+              <small>${page?.overlays.length ?? 0} lớp</small>
+            </div>
             ${
               page?.overlays.length
                 ? page.overlays
@@ -334,12 +438,12 @@ function render() {
                       `,
                     )
                     .join("")
-                : `<p class="muted">Chọn công cụ rồi bấm/drag trên trang.</p>`
+                : `<p class="empty-note">Chưa có lớp chỉnh sửa.</p>`
             }
           </div>
 
           <button id="delete-overlay" class="wide-button danger" ${overlay ? "" : "disabled"}>
-            <i data-lucide="x"></i>
+            <i data-lucide="trash-2"></i>
             Xóa lớp đang chọn
           </button>
         </aside>
@@ -354,8 +458,9 @@ function render() {
 
 function toolButton(tool: Tool, icon: string, label: string) {
   return `
-    <button class="segment ${state.tool === tool ? "active" : ""}" data-tool="${tool}" title="${label}">
+    <button class="toolbar-tool ${state.tool === tool ? "active" : ""}" data-tool="${tool}" title="${label}">
       <i data-lucide="${icon}"></i>
+      <span>${label}</span>
     </button>
   `;
 }
@@ -398,6 +503,26 @@ function bindEvents() {
     void mergeAllPdfs();
   });
 
+  document.querySelector<HTMLButtonElement>("#pdf-to-images")?.addEventListener("click", () => {
+    void exportPdfToImages();
+  });
+
+  document.querySelector<HTMLButtonElement>("#pdf-to-word")?.addEventListener("click", () => {
+    void exportPdfToWord();
+  });
+
+  document.querySelector<HTMLInputElement>("#word-input")?.addEventListener("change", (event) => {
+    const input = event.currentTarget as HTMLInputElement;
+    void convertWordToPdf(input.files?.[0] ?? null);
+    input.value = "";
+  });
+
+  document.querySelector<HTMLInputElement>("#images-input")?.addEventListener("change", (event) => {
+    const input = event.currentTarget as HTMLInputElement;
+    void convertImagesToPdf(input.files);
+    input.value = "";
+  });
+
   document.querySelector<HTMLButtonElement>("#clear-all")?.addEventListener("click", () => {
     state.sources.clear();
     state.pages = [];
@@ -405,7 +530,7 @@ function bindEvents() {
     state.selectedOverlayId = "";
     state.selectedTextItemId = "";
     state.textItemsByPageId.clear();
-    state.status = "Đã làm mới. Thêm PDF để bắt đầu lại.";
+    state.status = "Đã làm mới. Nhập PDF hoặc Word để bắt đầu.";
     render();
   });
 
@@ -458,6 +583,41 @@ function bindEvents() {
   document.querySelector<HTMLInputElement>("#cover-color")?.addEventListener("input", (event) => {
     const input = event.currentTarget as HTMLInputElement;
     state.coverColor = input.value;
+  });
+
+  document.querySelector<HTMLSelectElement>("#image-format")?.addEventListener("change", (event) => {
+    const select = event.currentTarget as HTMLSelectElement;
+    state.imageExportFormat = select.value === "jpg" ? "jpg" : "png";
+    render();
+  });
+
+  document.querySelector<HTMLInputElement>("#image-dpi")?.addEventListener("input", (event) => {
+    const input = event.currentTarget as HTMLInputElement;
+    state.imageExportDpi = Math.round(clamp(Number(input.value) || 150, 72, 300));
+  });
+
+  document.querySelector<HTMLInputElement>("#image-quality")?.addEventListener("input", (event) => {
+    const input = event.currentTarget as HTMLInputElement;
+    state.imageExportQuality = Math.round(clamp(Number(input.value) || 90, 40, 100));
+  });
+
+  document.querySelector<HTMLSelectElement>("#image-pdf-page-size")?.addEventListener("change", (event) => {
+    const select = event.currentTarget as HTMLSelectElement;
+    state.imagePdfPageSize = select.value === "a4" ? "a4" : "fit";
+  });
+
+  document.querySelector<HTMLSelectElement>("#word-export-mode")?.addEventListener("change", (event) => {
+    const select = event.currentTarget as HTMLSelectElement;
+    state.wordExportMode = select.value === "text" ? "text" : "layout";
+  });
+
+  document.querySelector<HTMLSelectElement>("#conversion-tool")?.addEventListener("change", (event) => {
+    const select = event.currentTarget as HTMLSelectElement;
+    const value = select.value as ConversionTool;
+    state.conversionTool = ["pdf-word", "word-pdf", "pdf-images", "images-pdf"].includes(value)
+      ? value
+      : "pdf-word";
+    render();
   });
 
   document.querySelector<HTMLButtonElement>("#delete-page")?.addEventListener("click", () => {
@@ -646,55 +806,105 @@ function updateDragPreview(
   preview.style.height = `${rect.height * 100}%`;
 }
 
+function isPdfFile(file: File) {
+  return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+}
+
+function isWordFile(file: File) {
+  return /\.(docx?|rtf|odt)$/i.test(file.name);
+}
+
+function convertedWordFileName(fileName: string) {
+  const baseName = fileName.replace(/\.(docx?|rtf|odt)$/i, "") || "word-file";
+  return `${baseName}.pdf`;
+}
+
+async function requestWordToPdf(file: File) {
+  const response = await fetch("/api/word-to-pdf", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      fileBase64: arrayBufferToBase64(await file.arrayBuffer()),
+      fileName: file.name,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorPayload = await response.json().catch(() => null) as { error?: string } | null;
+    throw new Error(errorPayload?.error || "Không thể chuyển Word sang PDF.");
+  }
+
+  return response.arrayBuffer();
+}
+
+async function addPdfSource(bytes: ArrayBuffer, fileName: string) {
+  const pdfDoc = await pdfjs.getDocument({ data: bytes.slice(0) }).promise;
+  const sourceId = id();
+
+  state.sources.set(sourceId, {
+    id: sourceId,
+    fileName,
+    bytes,
+    pdfDoc,
+  });
+
+  for (let index = 0; index < pdfDoc.numPages; index += 1) {
+    const pdfPage = await pdfDoc.getPage(index + 1);
+    const viewport = pdfPage.getViewport({ scale: 1 });
+
+    state.pages.push({
+      id: id(),
+      sourceId,
+      sourceName: fileName,
+      pageIndex: index,
+      width: viewport.width,
+      height: viewport.height,
+      overlays: [],
+    });
+  }
+}
+
 async function importFiles(fileList: FileList | null) {
-  const files = [...(fileList ?? [])].filter(
-    (file) => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"),
-  );
+  const files = [...(fileList ?? [])].filter((file) => isPdfFile(file) || isWordFile(file));
 
   if (!files.length) {
-    state.status = "Chưa có file PDF hợp lệ.";
+    state.status = "Chỉ hỗ trợ PDF, DOC, DOCX, RTF hoặc ODT.";
     render();
     return;
   }
 
   state.busy = true;
-  state.status = "Đang đọc PDF...";
+  state.status = "Đang nhập tài liệu...";
   render();
 
   try {
+    let convertedWordCount = 0;
+    let firstOutputName = "";
+
     for (const file of files) {
-      const bytes = await file.arrayBuffer();
-      const pdfDoc = await pdfjs.getDocument({ data: bytes.slice(0) }).promise;
-      const sourceId = id();
+      let bytes: ArrayBuffer;
+      let outputName = file.name;
 
-      state.sources.set(sourceId, {
-        id: sourceId,
-        fileName: file.name,
-        bytes,
-        pdfDoc,
-      });
-
-      for (let index = 0; index < pdfDoc.numPages; index += 1) {
-        const pdfPage = await pdfDoc.getPage(index + 1);
-        const viewport = pdfPage.getViewport({ scale: 1 });
-
-        state.pages.push({
-          id: id(),
-          sourceId,
-          sourceName: file.name,
-          pageIndex: index,
-          width: viewport.width,
-          height: viewport.height,
-          overlays: [],
-        });
+      if (isWordFile(file)) {
+        state.status = `Đang chuyển ${file.name} sang PDF...`;
+        bytes = await requestWordToPdf(file);
+        outputName = convertedWordFileName(file.name);
+        convertedWordCount += 1;
+      } else {
+        bytes = await file.arrayBuffer();
       }
+
+      firstOutputName ||= outputName;
+      await addPdfSource(bytes, outputName);
     }
 
     state.selectedPageId ||= state.pages[0]?.id ?? "";
-    state.exportName = suggestExportName(files[0]?.name ?? state.exportName);
-    state.status = `Đã thêm ${files.length} file PDF.`;
+    state.exportName = suggestExportName(firstOutputName || state.exportName);
+    state.status = convertedWordCount
+      ? `Đã nhập ${files.length} file, gồm ${convertedWordCount} file Word đã chuyển sang PDF.`
+      : `Đã nhập ${files.length} file PDF.`;
   } catch (error) {
-    state.status = error instanceof Error ? error.message : "Không thể đọc PDF.";
+    state.status = error instanceof Error ? error.message : "Không thể nhập tài liệu.";
   } finally {
     state.busy = false;
     render();
@@ -893,6 +1103,13 @@ function arrayBufferToBase64(buffer: ArrayBuffer) {
   return btoa(binary);
 }
 
+function uint8ArrayToArrayBuffer(bytes: Uint8Array) {
+  return bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer;
+}
+
 async function exportPdf() {
   if (!state.pages.length) {
     return;
@@ -903,32 +1120,223 @@ async function exportPdf() {
   render();
 
   try {
-    const outputDoc = await PDFDocument.create();
-    const sourceDocs = new Map<string, PDFDocument>();
-    const font = await outputDoc.embedFont(StandardFonts.Helvetica);
-
-    for (const pageItem of state.pages) {
-      const source = state.sources.get(pageItem.sourceId);
-      if (!source) {
-        continue;
-      }
-
-      let sourceDoc = sourceDocs.get(source.id);
-      if (!sourceDoc) {
-        sourceDoc = await PDFDocument.load(source.bytes.slice(0));
-        sourceDocs.set(source.id, sourceDoc);
-      }
-
-      const [copiedPage] = await outputDoc.copyPages(sourceDoc, [pageItem.pageIndex]);
-      outputDoc.addPage(copiedPage);
-      drawOverlays(copiedPage, pageItem, font);
-    }
-
-    const outputBytes = await outputDoc.save();
+    const outputBytes = await createEditedPdfBytes();
     downloadPdf(outputBytes, state.exportName);
     state.status = "Đã xuất PDF.";
   } catch (error) {
     state.status = error instanceof Error ? error.message : "Không thể xuất PDF.";
+  } finally {
+    state.busy = false;
+    render();
+  }
+}
+
+async function createEditedPdfBytes() {
+  const outputDoc = await PDFDocument.create();
+  const sourceDocs = new Map<string, PDFDocument>();
+  const font = await outputDoc.embedFont(StandardFonts.Helvetica);
+
+  for (const pageItem of state.pages) {
+    const source = state.sources.get(pageItem.sourceId);
+    if (!source) {
+      continue;
+    }
+
+    let sourceDoc = sourceDocs.get(source.id);
+    if (!sourceDoc) {
+      sourceDoc = await PDFDocument.load(source.bytes.slice(0));
+      sourceDocs.set(source.id, sourceDoc);
+    }
+
+    const [copiedPage] = await outputDoc.copyPages(sourceDoc, [pageItem.pageIndex]);
+    outputDoc.addPage(copiedPage);
+    drawOverlays(copiedPage, pageItem, font);
+  }
+
+  return outputDoc.save();
+}
+
+async function exportPdfToImages() {
+  if (!state.pages.length) {
+    return;
+  }
+
+  state.busy = true;
+  state.status = "Đang chuyển PDF sang hình ảnh...";
+  render();
+
+  try {
+    const outputBytes = await createEditedPdfBytes();
+    const response = await fetch("/api/pdf-to-images", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pdfBase64: arrayBufferToBase64(uint8ArrayToArrayBuffer(outputBytes)),
+        fileName: state.exportName,
+        format: state.imageExportFormat,
+        dpi: state.imageExportDpi,
+        quality: state.imageExportQuality,
+        pageRange: "all",
+      }),
+    });
+
+    if (!response.ok) {
+      const errorPayload = await response.json().catch(() => null) as { error?: string } | null;
+      throw new Error(errorPayload?.error || "Không thể chuyển PDF sang hình ảnh.");
+    }
+
+    const zipBytes = await response.arrayBuffer();
+    downloadBlob(
+      new Blob([zipBytes], { type: "application/zip" }),
+      `${state.exportName.replace(/\.pdf$/i, "") || "pdf-pages"}-images.zip`,
+    );
+    state.status = "Đã chuyển PDF sang hình ảnh.";
+  } catch (error) {
+    state.status = error instanceof Error ? error.message : "Không thể chuyển PDF sang hình ảnh.";
+  } finally {
+    state.busy = false;
+    render();
+  }
+}
+
+async function exportPdfToWord() {
+  if (!state.pages.length) {
+    return;
+  }
+
+  state.busy = true;
+  state.status = "Đang chuyển PDF sang Word...";
+  render();
+
+  try {
+    const outputBytes = await createEditedPdfBytes();
+    const response = await fetch("/api/pdf-to-word", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pdfBase64: arrayBufferToBase64(uint8ArrayToArrayBuffer(outputBytes)),
+        fileName: state.exportName,
+        pageRange: "all",
+        mode: state.wordExportMode,
+        dpi: 150,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorPayload = await response.json().catch(() => null) as { error?: string } | null;
+      throw new Error(errorPayload?.error || "Không thể chuyển PDF sang Word.");
+    }
+
+    const docxBytes = await response.arrayBuffer();
+    const baseName = state.exportName.replace(/\.pdf$/i, "") || "converted";
+    downloadBlob(
+      new Blob([docxBytes], {
+        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      }),
+      `${baseName}.docx`,
+    );
+    state.status = "Đã chuyển PDF sang Word.";
+  } catch (error) {
+    state.status = error instanceof Error ? error.message : "Không thể chuyển PDF sang Word.";
+  } finally {
+    state.busy = false;
+    render();
+  }
+}
+
+async function convertWordToPdf(file: File | null) {
+  if (!file) {
+    return;
+  }
+
+  const lowerName = file.name.toLowerCase();
+  const valid = lowerName.endsWith(".doc")
+    || lowerName.endsWith(".docx")
+    || lowerName.endsWith(".rtf")
+    || lowerName.endsWith(".odt");
+  if (!valid) {
+    state.status = "Chỉ hỗ trợ file Word .doc, .docx, .rtf hoặc .odt.";
+    render();
+    return;
+  }
+
+  state.busy = true;
+  state.status = "Đang chuyển Word sang PDF...";
+  render();
+
+  try {
+    const pdfBytes = await requestWordToPdf(file);
+    downloadBlob(new Blob([pdfBytes], { type: "application/pdf" }), convertedWordFileName(file.name));
+    state.status = "Đã chuyển Word sang PDF.";
+  } catch (error) {
+    state.status = error instanceof Error ? error.message : "Không thể chuyển Word sang PDF.";
+  } finally {
+    state.busy = false;
+    render();
+  }
+}
+
+async function convertImagesToPdf(fileList: FileList | null) {
+  const files = [...(fileList ?? [])].filter((file) => {
+    const name = file.name.toLowerCase();
+    return file.type === "image/png"
+      || file.type === "image/jpeg"
+      || name.endsWith(".png")
+      || name.endsWith(".jpg")
+      || name.endsWith(".jpeg");
+  });
+
+  if (!files.length) {
+    state.status = "Chưa có ảnh PNG/JPG hợp lệ.";
+    render();
+    return;
+  }
+
+  state.busy = true;
+  state.status = "Đang tạo PDF từ hình ảnh...";
+  render();
+
+  try {
+    const outputDoc = await PDFDocument.create();
+    const a4 = { width: 595.28, height: 841.89 };
+
+    for (const file of files) {
+      const bytes = await file.arrayBuffer();
+      const isPng = file.type === "image/png" || file.name.toLowerCase().endsWith(".png");
+      const image = isPng
+        ? await outputDoc.embedPng(bytes)
+        : await outputDoc.embedJpg(bytes);
+      const imageWidth = image.width;
+      const imageHeight = image.height;
+      const pageSize = state.imagePdfPageSize === "a4"
+        ? imageWidth > imageHeight
+          ? { width: a4.height, height: a4.width }
+          : a4
+        : { width: imageWidth, height: imageHeight };
+      const page = outputDoc.addPage([pageSize.width, pageSize.height]);
+      const margin = state.imagePdfPageSize === "a4" ? 24 : 0;
+      const maxWidth = pageSize.width - margin * 2;
+      const maxHeight = pageSize.height - margin * 2;
+      const scale = Math.min(maxWidth / imageWidth, maxHeight / imageHeight);
+      const width = imageWidth * scale;
+      const height = imageHeight * scale;
+
+      page.drawImage(image, {
+        x: (pageSize.width - width) / 2,
+        y: (pageSize.height - height) / 2,
+        width,
+        height,
+      });
+    }
+
+    const outputBytes = await outputDoc.save();
+    const baseName = files.length === 1
+      ? files[0].name.replace(/\.(png|jpe?g)$/i, "")
+      : "images";
+    downloadPdf(outputBytes, `${baseName}.pdf`);
+    state.status = `Đã tạo PDF từ ${files.length} ảnh.`;
+  } catch (error) {
+    state.status = error instanceof Error ? error.message : "Không thể tạo PDF từ hình ảnh.";
   } finally {
     state.busy = false;
     render();
@@ -970,11 +1378,15 @@ function downloadPdf(outputBytes: Uint8Array, fileName: string) {
     outputBytes.byteOffset + outputBytes.byteLength,
   ) as ArrayBuffer;
   const blob = new Blob([outputBuffer], { type: "application/pdf" });
+  downloadBlob(blob, fileName.toLowerCase().endsWith(".pdf") ? fileName : `${fileName}.pdf`);
+}
+
+function downloadBlob(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
 
   link.href = url;
-  link.download = fileName.toLowerCase().endsWith(".pdf") ? fileName : `${fileName}.pdf`;
+  link.download = fileName;
   link.click();
   URL.revokeObjectURL(url);
 }
