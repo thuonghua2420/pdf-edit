@@ -1,19 +1,13 @@
 
 > support-pdf@0.1.0 dev
+> node dev.mjs
+
+
+> support-pdf@0.1.0 dev:client
 > vite --host 127.0.0.1 --port 5173
 
+Port 5173 is in use, trying another one...
 
-  VITE v6.4.3  ready in 311 ms
+  VITE v6.4.3  ready in 266 ms
 
-  ➜  Local:   http://127.0.0.1:5173/
-11:26:11 PM [vite] (client) page reload src/main.ts
-11:29:09 PM [vite] (client) page reload src/main.ts
-11:29:20 PM [vite] (client) hmr update /src/styles.css
-11:42:17 PM [vite] (client) page reload src/main.ts
-11:42:33 PM [vite] (client) page reload src/main.ts
-11:42:40 PM [vite] (client) page reload src/main.ts
-11:42:45 PM [vite] (client) page reload src/main.ts
-11:43:06 PM [vite] (client) page reload src/main.ts
-11:43:28 PM [vite] (client) page reload src/main.ts
-11:43:51 PM [vite] (client) page reload src/main.ts
-11:44:08 PM [vite] (client) hmr update /src/styles.css
+  ➜  Local:   http://127.0.0.1:5174/

@@ -786,7 +786,7 @@ function editText(payload) {
 
 function pdfToImages(payload) {
   if (typeof payload.pdfBase64 !== "string" || !payload.pdfBase64) {
-    throw new Error("Thiáº¿u file PDF.");
+    throw new Error("Thiếu file PDF.");
   }
 
   const input = Buffer.from(payload.pdfBase64, "base64");
@@ -794,10 +794,10 @@ function pdfToImages(payload) {
   const pageCount = document.countPages();
   const pageIndexes = pageIndexesFromRange(payload.pageRange, pageCount);
   if (!pageIndexes.length) {
-    throw new Error("KhÃ´ng cÃ³ trang PDF há»£p lá»‡ Ä‘á»ƒ chuyá»ƒn Ä‘á»•i.");
+    throw new Error("Không có trang PDF hợp lệ để chuyển đổi.");
   }
   if (pageIndexes.length > 80) {
-    throw new Error("Táº¡m thá»i giá»›i háº¡n tá»‘i Ä‘a 80 trang má»—i láº§n xuáº¥t áº£nh.");
+    throw new Error("Tạm thời giới hạn tối đa 80 trang mỗi lần xuất ảnh.");
   }
 
   const format = String(payload.format || "png").toLowerCase() === "jpg" ? "jpg" : "png";
@@ -1148,11 +1148,186 @@ async function wordToPdf(payload) {
   }
 }
 
+const fontCatalog = [
+  { id: "arial", label: "Arial", files: { r: "arial.ttf", b: "arialbd.ttf", i: "ariali.ttf", bi: "arialbi.ttf" } },
+  { id: "times", label: "Times New Roman", files: { r: "times.ttf", b: "timesbd.ttf", i: "timesi.ttf", bi: "timesbi.ttf" } },
+  { id: "courier", label: "Courier New", files: { r: "cour.ttf", b: "courbd.ttf", i: "couri.ttf", bi: "courbi.ttf" } },
+  { id: "calibri", label: "Calibri", files: { r: "calibri.ttf", b: "calibrib.ttf", i: "calibrii.ttf", bi: "calibriz.ttf" } },
+  { id: "georgia", label: "Georgia", files: { r: "georgia.ttf", b: "georgiab.ttf", i: "georgiai.ttf", bi: "georgiaz.ttf" } },
+  { id: "tahoma", label: "Tahoma", files: { r: "tahoma.ttf", b: "tahomabd.ttf" } },
+  { id: "verdana", label: "Verdana", files: { r: "verdana.ttf", b: "verdanab.ttf", i: "verdanai.ttf", bi: "verdanaz.ttf" } },
+  { id: "segoe", label: "Segoe UI", files: { r: "segoeui.ttf", b: "segoeuib.ttf", i: "segoeuii.ttf", bi: "segoeuiz.ttf" } },
+  { id: "dejavu", label: "DejaVu Sans", files: { r: "DejaVuSans.ttf", b: "DejaVuSans-Bold.ttf", i: "DejaVuSans-Oblique.ttf", bi: "DejaVuSans-BoldOblique.ttf" } },
+  { id: "script-segoe", label: "Segoe Script", script: true, files: { r: "segoesc.ttf", b: "segoescb.ttf" } },
+  { id: "script-ink", label: "Ink Free", script: true, files: { r: "Inkfree.ttf" } },
+  { id: "script-brush", label: "Brush Script", script: true, files: { r: "BRUSHSCI.TTF" } },
+  { id: "script-lucida", label: "Lucida Handwriting", script: true, files: { r: "LHANDW.TTF" } },
+];
+
+function fontDirectories() {
+  const windowsFonts = process.env.WINDIR
+    ? path.join(process.env.WINDIR, "Fonts")
+    : "C:\\Windows\\Fonts";
+  return [
+    process.env.PDF_FONT_DIR,
+    windowsFonts,
+    path.join(os.homedir(), "AppData", "Local", "Microsoft", "Windows", "Fonts"),
+    "/usr/share/fonts/truetype/dejavu",
+    "/System/Library/Fonts/Supplemental",
+    "/Library/Fonts",
+  ].filter(Boolean);
+}
+
+function resolveFontFile(fileName) {
+  if (!fileName) {
+    return null;
+  }
+  for (const directory of fontDirectories()) {
+    const candidate = path.join(directory, fileName);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function resolveFont(familyId, bold, italic) {
+  const family = fontCatalog.find((entry) => entry.id === familyId);
+  if (!family) {
+    return null;
+  }
+  const order = bold && italic
+    ? ["bi", "b", "i", "r"]
+    : bold ? ["b", "r"] : italic ? ["i", "r"] : ["r"];
+  for (const key of order) {
+    const found = resolveFontFile(family.files[key]);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
+}
+
+function listFonts() {
+  return fontCatalog
+    .filter((family) => resolveFontFile(family.files.r))
+    .map((family) => ({
+      id: family.id,
+      label: family.label,
+      script: Boolean(family.script),
+      bold: Boolean(family.files.b && resolveFontFile(family.files.b)),
+      italic: Boolean(family.files.i && resolveFontFile(family.files.i)),
+    }));
+}
+
+function openPdf(payload, password) {
+  if (typeof payload.pdfBase64 !== "string" || !payload.pdfBase64) {
+    throw new Error("Thiếu file PDF.");
+  }
+  const input = Buffer.from(payload.pdfBase64, "base64");
+  const document = mupdf.Document.openDocument(input, "application/pdf");
+  if (document.needsPassword()) {
+    if (!password) {
+      const error = new Error("PDF này được bảo vệ bằng mật khẩu.");
+      error.code = "PASSWORD_REQUIRED";
+      throw error;
+    }
+    if (!document.authenticatePassword(String(password))) {
+      const error = new Error("Mật khẩu không đúng.");
+      error.code = "PASSWORD_WRONG";
+      throw error;
+    }
+  }
+  const pdf = document.asPDF();
+  if (!pdf) {
+    throw new Error("File không phải PDF hợp lệ.");
+  }
+  return pdf;
+}
+
+function unlockPdf(payload) {
+  const document = openPdf(payload, payload.password);
+  return Buffer.from(document.saveToBuffer("garbage=1,compress,encrypt=none").asUint8Array());
+}
+
+// Hoàn tất PDF: che vùng nhạy cảm (xóa thật nội dung bên dưới), tối ưu dung lượng, đặt mật khẩu.
+function finalizePdf(payload) {
+  const document = openPdf(payload);
+  const redactions = Array.isArray(payload.redactions) ? payload.redactions : [];
+  const pageCount = document.countPages();
+  const byPage = new Map();
+
+  for (const item of redactions) {
+    const pageIndex = Number(item?.pageIndex);
+    if (!Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= pageCount || !Array.isArray(item.rect)) {
+      continue;
+    }
+    if (!byPage.has(pageIndex)) {
+      byPage.set(pageIndex, []);
+    }
+    byPage.get(pageIndex).push(item.rect);
+  }
+
+  for (const [pageIndex, rects] of byPage) {
+    const page = document.loadPage(pageIndex);
+    const bounds = page.getBounds();
+    const pageWidth = bounds[2] - bounds[0];
+    const pageHeight = bounds[3] - bounds[1];
+
+    for (const rawRect of rects) {
+      const x0 = numberInRange(rawRect[0], 0, 1, 0);
+      const y0 = numberInRange(rawRect[1], 0, 1, 0);
+      const x1 = numberInRange(rawRect[2], x0, 1, 1);
+      const y1 = numberInRange(rawRect[3], y0, 1, 1);
+      const annotation = page.createAnnotation("Redact");
+      annotation.setRect([
+        bounds[0] + x0 * pageWidth,
+        bounds[1] + y0 * pageHeight,
+        bounds[0] + x1 * pageWidth,
+        bounds[1] + y1 * pageHeight,
+      ]);
+      annotation.update();
+    }
+
+    page.applyRedactions(
+      true,
+      mupdf.PDFPage.REDACT_IMAGE_PIXELS,
+      mupdf.PDFPage.REDACT_LINE_ART_REMOVE_IF_TOUCHED,
+      mupdf.PDFPage.REDACT_TEXT_REMOVE,
+    );
+  }
+
+  const options = [];
+  if (payload.optimize) {
+    options.push("garbage=4", "compress", "compress-images", "compress-fonts");
+  } else if (byPage.size) {
+    options.push("garbage=1", "compress");
+  } else {
+    options.push("garbage=0");
+  }
+
+  const password = String(payload.password || "");
+  if (password) {
+    options.push(
+      "encrypt=aes-256",
+      `user-password=${password.replace(/,/g, "")}`,
+      `owner-password=${password.replace(/,/g, "")}`,
+      `permissions=${payload.restrict ? 2564 : -1}`,
+    );
+  }
+
+  return Buffer.from(document.saveToBuffer(options.join(",")).asUint8Array());
+}
+
 function contentType(filePath) {
   const extension = path.extname(filePath).toLowerCase();
   return {
     ".css": "text/css; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
+    ".mjs": "text/javascript; charset=utf-8",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+    ".woff2": "font/woff2",
     ".html": "text/html; charset=utf-8",
     ".json": "application/json; charset=utf-8",
     ".svg": "image/svg+xml",
@@ -1191,6 +1366,56 @@ const server = http.createServer(async (request, response) => {
     return;
   }
 
+  if (url.pathname === "/api/fonts" && request.method === "GET") {
+    sendJson(response, 200, { fonts: listFonts() });
+    return;
+  }
+
+  if (url.pathname === "/api/font" && request.method === "GET") {
+    const fontFile = resolveFont(
+      url.searchParams.get("family") || "arial",
+      url.searchParams.get("bold") === "1",
+      url.searchParams.get("italic") === "1",
+    );
+    if (!fontFile) {
+      sendJson(response, 404, { error: "Không tìm thấy font." });
+      return;
+    }
+    const bytes = fs.readFileSync(fontFile);
+    response.writeHead(200, {
+      "Content-Type": "font/ttf",
+      "Content-Length": bytes.length,
+      "Cache-Control": "public, max-age=86400",
+    });
+    response.end(bytes);
+    return;
+  }
+
+  if (url.pathname === "/api/finalize" && request.method === "POST") {
+    try {
+      const payload = await readJson(request);
+      sendPdf(response, finalizePdf(payload), "output.pdf");
+    } catch (error) {
+      sendJson(response, 400, {
+        error: error instanceof Error ? error.message : "Không thể hoàn tất PDF.",
+      });
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/unlock" && request.method === "POST") {
+    try {
+      const payload = await readJson(request);
+      sendPdf(response, unlockPdf(payload), "unlocked.pdf");
+    } catch (error) {
+      sendJson(response, error?.code ? 401 : 400, {
+        code: error?.code,
+        error: error instanceof Error ? error.message : "Không thể mở khóa PDF.",
+      });
+    }
+    return;
+  }
+
   if (url.pathname === "/api/edit-text" && request.method === "POST") {
     try {
       const payload = await readJson(request);
@@ -1212,7 +1437,7 @@ const server = http.createServer(async (request, response) => {
       sendBinary(response, output, "application/zip", fileName);
     } catch (error) {
       sendJson(response, 400, {
-        error: error instanceof Error ? error.message : "KhÃ´ng thá»ƒ chuyá»ƒn PDF sang hÃ¬nh áº£nh.",
+        error: error instanceof Error ? error.message : "Không thể chuyển PDF sang hình ảnh.",
       });
     }
     return;
